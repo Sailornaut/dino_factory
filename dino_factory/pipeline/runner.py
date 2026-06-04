@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,26 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def run_pipeline(cfg: dict[str, Any], resume: bool = True):
+class PipelineCancelled(Exception):
+    """Raised when the user cancels the pipeline."""
+
+
+def _check_cancel(cancel_event: threading.Event | None,
+                  pause_event: threading.Event | None = None):
+    """Block while paused; raise PipelineCancelled if cancelled."""
+    if pause_event is not None:
+        while pause_event.is_set():
+            # Check cancel while paused so cancel unblocks immediately
+            if cancel_event is not None and cancel_event.is_set():
+                raise PipelineCancelled("Pipeline cancelled by user")
+            pause_event.wait(0.5)  # re-check every 500ms
+    if cancel_event is not None and cancel_event.is_set():
+        raise PipelineCancelled("Pipeline cancelled by user")
+
+
+def run_pipeline(cfg: dict[str, Any], resume: bool = True,
+                 cancel_event: threading.Event | None = None,
+                 pause_event: threading.Event | None = None):
     """Run the full Short generation pipeline."""
 
     # Create batch output directory
@@ -60,6 +80,7 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True):
     count = cfg.get("number_of_shorts", 5)
 
     # Stage 1: Generate topics
+    _check_cancel(cancel_event, pause_event)
     logger.info("=" * 60)
     logger.info("STAGE 1: Generating %d topics", count)
     logger.info("=" * 60)
@@ -77,6 +98,8 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True):
     for i, topic in enumerate(topics, 1):
         slug = topic.get("slug", f"short_{i:03d}")
         short_dir = shorts_dir / f"{i:03d}_{slug}"
+
+        _check_cancel(cancel_event, pause_event)
 
         logger.info("")
         logger.info("=" * 60)
@@ -105,7 +128,11 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True):
                 voice_provider=voice_provider,
                 assembler=assembler,
                 all_metadata=all_metadata,
+                cancel_event=cancel_event,
+                pause_event=pause_event,
             )
+        except PipelineCancelled:
+            raise  # let it bubble up cleanly
         except Exception as e:
             logger.error("Failed to process Short '%s': %s", slug, e)
             # Move to errors folder
@@ -141,11 +168,14 @@ def _process_single_short(
     voice_provider,
     assembler,
     all_metadata: list,
+    cancel_event: threading.Event | None = None,
+    pause_event: threading.Event | None = None,
 ):
     """Process a single Short through all stages."""
     short_dir.mkdir(parents=True, exist_ok=True)
 
     # Stage 2: Generate script
+    _check_cancel(cancel_event, pause_event)
     logger.info("  → Generating script...")
     script = generate_script(
         llm=llm,
@@ -155,6 +185,7 @@ def _process_single_short(
     )
 
     # Stage 3: Generate images
+    _check_cancel(cancel_event, pause_event)
     if cfg.get("image_generation_enabled", True):
         logger.info("  → Generating images...")
         image_paths = generate_images(
@@ -167,6 +198,7 @@ def _process_single_short(
         image_paths = []
 
     # Stage 4: Generate voiceover
+    _check_cancel(cancel_event, pause_event)
     if cfg.get("voice_generation_enabled", True):
         logger.info("  → Generating voiceover...")
         audio_path = generate_voiceover(
@@ -180,6 +212,7 @@ def _process_single_short(
         audio_path = None
 
     # Stage 5: Generate captions
+    _check_cancel(cancel_event, pause_event)
     if cfg.get("include_captions", True):
         logger.info("  → Generating captions...")
         captions_path = generate_captions(
@@ -190,6 +223,7 @@ def _process_single_short(
         captions_path = None
 
     # Stage 6: Assemble video
+    _check_cancel(cancel_event, pause_event)
     if cfg.get("video_generation_enabled", True) and image_paths:
         logger.info("  → Assembling video...")
         assemble_video(
