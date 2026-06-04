@@ -1,9 +1,35 @@
 """Structured logging setup."""
 
+import codecs
+import io
 import logging
 import sys
 
 _configured = False
+
+
+class _SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler that replaces unencodable characters instead of crashing.
+
+    On Windows the default stdout codec is 'charmap' which cannot encode emoji
+    that appear in generated content.  This wrapper encodes each record to
+    UTF-8 with errors='replace' before writing, so the pipeline never crashes
+    on a stray dinosaur emoji.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            # Write safely regardless of the stream's native encoding
+            if hasattr(stream, "buffer"):
+                stream.buffer.write((msg + self.terminator).encode("utf-8", errors="replace"))
+                stream.buffer.flush()
+            else:
+                stream.write(msg + self.terminator)
+                stream.flush()
+        except Exception:
+            self.handleError(record)
 
 
 def setup_logging(level: int = logging.INFO):
@@ -13,23 +39,12 @@ def setup_logging(level: int = logging.INFO):
         return
     _configured = True
 
-    # Reconfigure stdout to UTF-8 once, so emoji in log messages don't crash
-    # on Windows where the default console codec is charmap.
-    if hasattr(sys.stdout, "reconfigure"):
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)-7s] %(name)s — %(message)s",
         datefmt="%H:%M:%S",
     )
 
-    # Force UTF-8 on Windows where the default console codec (charmap) rejects emoji
-    stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1) \
-        if hasattr(sys.stdout, "fileno") else sys.stdout
-    handler = logging.StreamHandler(stdout)
+    handler = _SafeStreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
