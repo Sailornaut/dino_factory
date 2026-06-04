@@ -32,7 +32,7 @@ def assemble_video(
         durations = durations[: len(image_paths)]
 
     title_text = script.get("title", "")
-    outro_text = "Which dino should we explore next? 🦕"
+    outro_text = script.get("call_to_action", "Which dino should we explore next?")
 
     music = Path(music_path) if music_path else None
 
