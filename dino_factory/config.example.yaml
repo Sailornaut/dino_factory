@@ -1,0 +1,41 @@
+# DinoFactAdventures Factory — Configuration
+# Copy this to config.yaml and customize.
+
+# Seed idea for topic generation
+idea: "fun dinosaur facts for kids"
+
+# Channel settings
+channel_name: "DinoFactAdventures"
+audience: "kids ages 4-8"
+tone: "cheerful, educational, friendly"
+
+# Batch settings
+number_of_shorts: 5
+target_length_seconds: 45
+scenes_per_short: 6
+
+# Visual style (used in image prompts)
+visual_style: "cute 3D cartoon, bright colors, friendly dinosaurs"
+
+# Output
+output_dir: "output"
+
+# Providers — set to "placeholder" to skip API calls
+# Options: openai, placeholder
+llm_provider: openai
+image_provider: placeholder
+voice_provider: placeholder
+
+# OpenAI settings (only used if provider is "openai")
+openai_model: "gpt-4o-mini"
+narrator_voice: "alloy"
+
+# Feature toggles
+image_generation_enabled: true
+voice_generation_enabled: true
+video_generation_enabled: true
+include_captions: true
+youtube_metadata_enabled: true
+
+# Optional background music file path
+background_music_path: ""

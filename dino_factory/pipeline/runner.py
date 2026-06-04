@@ -1,0 +1,218 @@
+"""Pipeline runner — orchestrates all stages for a batch of Shorts."""
+
+import json
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from pipeline.captions import generate_captions
+from pipeline.images import generate_images
+from pipeline.metadata import generate_batch_csv, generate_metadata
+from pipeline.script import generate_script
+from pipeline.topics import generate_topics
+from pipeline.video import assemble_video
+from pipeline.voiceover import generate_voiceover
+from providers.image import create_image_provider
+from providers.llm import create_llm_provider
+from providers.video import create_video_assembler
+from providers.voice import create_voice_provider
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def run_pipeline(cfg: dict[str, Any], resume: bool = True):
+    """Run the full Short generation pipeline."""
+
+    # Create batch output directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    output_base = Path(cfg.get("output_dir", "output"))
+    batch_dir = output_base / f"batch_{timestamp}"
+
+    # If resuming, look for the most recent existing batch
+    if resume and output_base.exists():
+        existing = sorted(output_base.glob("batch_*"), reverse=True)
+        if existing:
+            batch_dir = existing[0]
+            logger.info("Resuming batch: %s", batch_dir)
+
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    shorts_dir = batch_dir / "shorts"
+    shorts_dir.mkdir(exist_ok=True)
+    errors_dir = batch_dir / "errors"
+    errors_dir.mkdir(exist_ok=True)
+
+    # Save config snapshot
+    cfg_snapshot = batch_dir / "config.yaml"
+    if not cfg_snapshot.exists():
+        with open(cfg_snapshot, "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False)
+
+    # Initialize providers
+    llm = create_llm_provider(cfg)
+    image_provider = create_image_provider(cfg)
+    voice_provider = create_voice_provider(cfg)
+    assembler = create_video_assembler(cfg)
+
+    count = cfg.get("number_of_shorts", 5)
+
+    # Stage 1: Generate topics
+    logger.info("=" * 60)
+    logger.info("STAGE 1: Generating %d topics", count)
+    logger.info("=" * 60)
+    topics = generate_topics(
+        llm=llm,
+        idea=cfg["idea"],
+        count=count,
+        audience=cfg.get("audience", "kids ages 4-8"),
+        cache_path=batch_dir / "topics.json",
+    )
+    logger.info("Got %d topics", len(topics))
+
+    # Process each Short
+    all_metadata = []
+    for i, topic in enumerate(topics, 1):
+        slug = topic.get("slug", f"short_{i:03d}")
+        short_dir = shorts_dir / f"{i:03d}_{slug}"
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("SHORT %d/%d: %s", i, len(topics), topic.get("title", slug))
+        logger.info("=" * 60)
+
+        # Check if already complete
+        video_path = short_dir / "video.mp4"
+        if resume and video_path.exists():
+            logger.info("✓ Already complete — skipping")
+            meta_path = short_dir / "metadata.json"
+            if meta_path.exists():
+                with open(meta_path) as f:
+                    all_metadata.append(json.load(f))
+            else:
+                all_metadata.append({"title": topic.get("title", "")})
+            continue
+
+        try:
+            _process_single_short(
+                topic=topic,
+                short_dir=short_dir,
+                cfg=cfg,
+                llm=llm,
+                image_provider=image_provider,
+                voice_provider=voice_provider,
+                assembler=assembler,
+                all_metadata=all_metadata,
+            )
+        except Exception as e:
+            logger.error("Failed to process Short '%s': %s", slug, e)
+            # Move to errors folder
+            err_file = errors_dir / f"{slug}.error.txt"
+            err_file.write_text(f"Topic: {json.dumps(topic)}\nError: {e}")
+            all_metadata.append({"title": topic.get("title", ""), "error": str(e)})
+
+    # Final: generate batch CSV
+    if cfg.get("youtube_metadata_enabled", True):
+        logger.info("")
+        logger.info("Generating batch metadata CSV...")
+        generate_batch_csv(batch_dir, topics, all_metadata)
+
+    # Summary
+    completed = sum(1 for m in all_metadata if "error" not in m)
+    failed = sum(1 for m in all_metadata if "error" in m)
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("BATCH COMPLETE")
+    logger.info("Output: %s", batch_dir)
+    logger.info("Completed: %d / %d", completed, len(topics))
+    if failed:
+        logger.warning("Failed: %d (see %s)", failed, errors_dir)
+    logger.info("=" * 60)
+
+
+def _process_single_short(
+    topic: dict,
+    short_dir: Path,
+    cfg: dict,
+    llm,
+    image_provider,
+    voice_provider,
+    assembler,
+    all_metadata: list,
+):
+    """Process a single Short through all stages."""
+    short_dir.mkdir(parents=True, exist_ok=True)
+
+    # Stage 2: Generate script
+    logger.info("  → Generating script...")
+    script = generate_script(
+        llm=llm,
+        topic=topic,
+        cfg=cfg,
+        cache_path=short_dir / "script.json",
+    )
+
+    # Stage 3: Generate images
+    if cfg.get("image_generation_enabled", True):
+        logger.info("  → Generating images...")
+        image_paths = generate_images(
+            image_provider=image_provider,
+            script=script,
+            images_dir=short_dir / "images",
+        )
+    else:
+        logger.info("  → Image generation disabled — skipping")
+        image_paths = []
+
+    # Stage 4: Generate voiceover
+    if cfg.get("voice_generation_enabled", True):
+        logger.info("  → Generating voiceover...")
+        audio_path = generate_voiceover(
+            voice_provider=voice_provider,
+            script=script,
+            audio_dir=short_dir / "audio",
+            voice=cfg.get("narrator_voice", "alloy"),
+        )
+    else:
+        logger.info("  → Voice generation disabled — skipping")
+        audio_path = None
+
+    # Stage 5: Generate captions
+    if cfg.get("include_captions", True):
+        logger.info("  → Generating captions...")
+        captions_path = generate_captions(
+            script=script,
+            captions_path=short_dir / "captions.srt",
+        )
+    else:
+        captions_path = None
+
+    # Stage 6: Assemble video
+    if cfg.get("video_generation_enabled", True) and image_paths:
+        logger.info("  → Assembling video...")
+        assemble_video(
+            assembler=assembler,
+            script=script,
+            image_paths=image_paths,
+            audio_path=audio_path,
+            captions_path=captions_path,
+            output_path=short_dir / "video.mp4",
+            music_path=cfg.get("background_music_path", ""),
+        )
+    else:
+        logger.info("  → Video assembly skipped (disabled or no images)")
+
+    # Stage 7: Generate metadata
+    if cfg.get("youtube_metadata_enabled", True):
+        logger.info("  → Generating metadata...")
+        meta = generate_metadata(
+            script=script,
+            metadata_path=short_dir / "metadata.json",
+        )
+        all_metadata.append(meta)
+    else:
+        all_metadata.append({"title": script.get("title", "")})
+
+    logger.info("  ✓ Short complete: %s", short_dir.name)
