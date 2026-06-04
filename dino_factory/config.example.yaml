@@ -30,7 +30,7 @@ voice_provider: elevenlabs
 
 # OpenAI settings
 openai_model: "gpt-4o-mini"
-openai_image_model: "dall-e-2"
+openai_image_model: "chatgpt-image-latest"
 narrator_voice: "alloy"   # used only if voice_provider is openai
 
 # ElevenLabs settings

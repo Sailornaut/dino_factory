@@ -87,7 +87,7 @@ class PlaceholderImageProvider(ImageProvider):
 class OpenAIImageProvider(ImageProvider):
     """Uses OpenAI DALL-E for image generation."""
 
-    def __init__(self, api_key: str | None = None, model: str = "dall-e-2"):
+    def __init__(self, api_key: str | None = None, model: str = "chatgpt-image-latest"):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self.model = model
         if not self.api_key:
@@ -99,22 +99,25 @@ class OpenAIImageProvider(ImageProvider):
             raise ImportError("pip install openai")
 
     def generate_image(self, prompt: str, output_path: Path, width: int = 1080, height: int = 1920) -> Path:
+        import base64
         import urllib.request
 
-        # dall-e-2 supports 256x256, 512x512, 1024x1024 only — use largest square
-        # and let the video pipeline letterbox/crop it into vertical format.
-        size = "1024x1024"
+        size = "1024x1536"  # portrait — supported by chatgpt-image-latest and gpt-image-1
         for attempt in range(3):
             try:
                 resp = self.client.images.generate(
                     model=self.model,
                     prompt=prompt,
                     size=size,
+                    quality="medium",
                     n=1,
                 )
-                url = resp.data[0].url
+                item = resp.data[0]
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                urllib.request.urlretrieve(url, str(output_path))
+                if item.b64_json:
+                    output_path.write_bytes(base64.b64decode(item.b64_json))
+                else:
+                    urllib.request.urlretrieve(item.url, str(output_path))
                 logger.info("Image generated: %s", output_path)
                 return output_path
             except Exception as e:
