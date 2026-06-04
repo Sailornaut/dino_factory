@@ -77,6 +77,51 @@ class OpenAIVoiceProvider(VoiceProvider):
                     raise
 
 
+class ElevenLabsVoiceProvider(VoiceProvider):
+    """Uses ElevenLabs TTS API."""
+
+    # A friendly, warm kids-narrator voice available on all ElevenLabs tiers.
+    DEFAULT_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"  # George — clear, friendly
+
+    def __init__(self, api_key: str | None = None, voice_id: str | None = None):
+        self.api_key = api_key or os.getenv("ELEVENLABS_API_KEY", "")
+        self.voice_id = voice_id or os.getenv("ELEVENLABS_VOICE_ID", self.DEFAULT_VOICE_ID)
+        if not self.api_key:
+            raise ValueError("No ElevenLabs API key. Set ELEVENLABS_API_KEY or pass api_key=.")
+        try:
+            from elevenlabs.client import ElevenLabs
+            self.client = ElevenLabs(api_key=self.api_key)
+        except ImportError:
+            raise ImportError("pip install elevenlabs")
+
+    def generate_speech(self, text: str, output_path: Path, voice: str = "") -> Path:
+        # 'voice' arg may carry an ElevenLabs voice_id; fall back to configured one.
+        voice_id = voice if voice and voice != "alloy" else self.voice_id
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        for attempt in range(3):
+            try:
+                from elevenlabs.client import ElevenLabs
+                audio = self.client.text_to_speech.convert(
+                    voice_id=voice_id,
+                    text=text,
+                    model_id="eleven_turbo_v2_5",
+                    output_format="mp3_44100_128",
+                )
+                # audio is a generator of bytes chunks
+                with open(output_path, "wb") as f:
+                    for chunk in audio:
+                        f.write(chunk)
+                logger.info("ElevenLabs audio saved: %s", output_path)
+                return output_path
+            except Exception as e:
+                logger.warning("ElevenLabs TTS attempt %d failed: %s", attempt + 1, e)
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+                else:
+                    raise
+
+
 def create_voice_provider(cfg: dict) -> VoiceProvider:
     """Factory function."""
     provider = cfg.get("voice_provider", "placeholder")
@@ -89,4 +134,11 @@ def create_voice_provider(cfg: dict) -> VoiceProvider:
             logger.warning("No API key for OpenAI TTS — falling back to placeholder")
             return PlaceholderVoiceProvider()
         return OpenAIVoiceProvider(api_key=api_key)
+    if provider == "elevenlabs":
+        api_key = cfg.get("elevenlabs_api_key", os.getenv("ELEVENLABS_API_KEY", ""))
+        if not api_key:
+            logger.warning("No API key for ElevenLabs — falling back to placeholder")
+            return PlaceholderVoiceProvider()
+        voice_id = cfg.get("elevenlabs_voice_id", os.getenv("ELEVENLABS_VOICE_ID", ""))
+        return ElevenLabsVoiceProvider(api_key=api_key, voice_id=voice_id or None)
     raise ValueError(f"Unknown voice_provider: {provider}")

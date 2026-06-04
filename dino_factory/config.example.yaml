@@ -21,14 +21,22 @@ visual_style: "cute 3D cartoon, bright colors, friendly dinosaurs"
 output_dir: "output"
 
 # Providers — set to "placeholder" to skip API calls
-# Options: openai, placeholder
+# llm_provider options:   openai, placeholder
+# image_provider options: openai, placeholder
+# voice_provider options: elevenlabs, openai, placeholder
 llm_provider: openai
-image_provider: placeholder
-voice_provider: placeholder
+image_provider: openai
+voice_provider: elevenlabs
 
-# OpenAI settings (only used if provider is "openai")
+# OpenAI settings
 openai_model: "gpt-4o-mini"
-narrator_voice: "alloy"
+narrator_voice: "alloy"   # used only if voice_provider is openai
+
+# ElevenLabs settings
+# voice_id: leave blank to use the default (George — friendly kids narrator)
+# Full list: https://api.elevenlabs.io/v1/voices
+elevenlabs_voice_id: ""
+elevenlabs_model: "eleven_turbo_v2_5"
 
 # Feature toggles
 image_generation_enabled: true
