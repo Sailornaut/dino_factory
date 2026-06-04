@@ -87,7 +87,7 @@ class PlaceholderImageProvider(ImageProvider):
 class OpenAIImageProvider(ImageProvider):
     """Uses OpenAI DALL-E for image generation."""
 
-    def __init__(self, api_key: str | None = None, model: str = "dall-e-3"):
+    def __init__(self, api_key: str | None = None, model: str = "gpt-image-1"):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self.model = model
         if not self.api_key:
@@ -99,21 +99,22 @@ class OpenAIImageProvider(ImageProvider):
             raise ImportError("pip install openai")
 
     def generate_image(self, prompt: str, output_path: Path, width: int = 1080, height: int = 1920) -> Path:
-        import urllib.request
+        import base64
 
-        size = "1024x1792"  # closest DALL-E 3 vertical size
+        size = "1024x1536"  # closest gpt-image-1 portrait size
         for attempt in range(3):
             try:
                 resp = self.client.images.generate(
                     model=self.model,
                     prompt=prompt,
                     size=size,
-                    quality="standard",
+                    quality="medium",
                     n=1,
+                    output_format="png",
                 )
-                url = resp.data[0].url
+                image_data = base64.b64decode(resp.data[0].b64_json)
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                urllib.request.urlretrieve(url, str(output_path))
+                output_path.write_bytes(image_data)
                 logger.info("Image generated: %s", output_path)
                 return output_path
             except Exception as e:
