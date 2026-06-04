@@ -1,6 +1,7 @@
 """Image provider implementations."""
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -8,6 +9,17 @@ from providers.base import ImageProvider
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+MAX_ATTEMPTS = 6  # more attempts to ride out rate limits
+BASE_DELAY = 3    # seconds
+
+
+def _parse_retry_after(error_msg: str) -> float | None:
+    """Extract 'Please try again in Ns' from OpenAI rate-limit errors."""
+    match = re.search(r"try again in (\d+\.?\d*)s", str(error_msg))
+    if match:
+        return float(match.group(1)) + 1.0  # add 1s buffer
+    return None
 
 
 class PlaceholderImageProvider(ImageProvider):
@@ -103,7 +115,7 @@ class OpenAIImageProvider(ImageProvider):
         import urllib.request
 
         size = "1024x1536"  # portrait — supported by chatgpt-image-latest and gpt-image-1
-        for attempt in range(3):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 resp = self.client.images.generate(
                     model=self.model,
@@ -121,10 +133,25 @@ class OpenAIImageProvider(ImageProvider):
                 logger.info("Image generated: %s", output_path)
                 return output_path
             except Exception as e:
-                logger.warning("Image gen attempt %d failed: %s", attempt + 1, e)
-                if attempt < 2:
-                    time.sleep(2 * (attempt + 1))
+                err_str = str(e)
+                is_rate_limit = "429" in err_str or "rate_limit" in err_str.lower()
+                is_auth_error = "401" in err_str and "Not authorized" in err_str
+
+                if attempt < MAX_ATTEMPTS and (is_rate_limit or is_auth_error):
+                    # Parse the wait time from the error, or use exponential backoff
+                    wait = _parse_retry_after(err_str) or (BASE_DELAY * attempt)
+                    logger.warning("Image gen attempt %d/%d: %s — waiting %.0fs",
+                                   attempt, MAX_ATTEMPTS,
+                                   "rate limited" if is_rate_limit else "transient 401",
+                                   wait)
+                    time.sleep(wait)
+                elif attempt < MAX_ATTEMPTS:
+                    wait = BASE_DELAY * attempt
+                    logger.warning("Image gen attempt %d/%d failed: %s — retrying in %.0fs",
+                                   attempt, MAX_ATTEMPTS, e, wait)
+                    time.sleep(wait)
                 else:
+                    logger.error("Image gen failed after %d attempts: %s", MAX_ATTEMPTS, e)
                     raise
 
 

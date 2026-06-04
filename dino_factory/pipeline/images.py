@@ -1,11 +1,15 @@
 """Stage: generate images for each scene."""
 
+import time
 from pathlib import Path
 
 from providers.base import ImageProvider
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Delay between image generation requests to stay under rate limits (5/min tier).
+IMAGE_DELAY_SECONDS = 14
 
 
 def generate_images(
@@ -27,6 +31,12 @@ def generate_images(
             continue
 
         prompt = scene.get("image_prompt", scene.get("visual_description", "colorful dinosaur scene"))
+
+        # Rate-limit pacing: wait between requests (skip for first image and cached images)
+        if len(paths) > 0 and not img_path.exists():
+            logger.debug("Pacing: waiting %ds before next image request...", IMAGE_DELAY_SECONDS)
+            time.sleep(IMAGE_DELAY_SECONDS)
+
         try:
             result = image_provider.generate_image(prompt, img_path)
             paths.append(result)
