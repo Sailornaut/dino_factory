@@ -32,7 +32,7 @@ def generate_captions(script: dict, captions_path: Path) -> Path:
         lines.append("")
         current_time += duration
 
-    with open(captions_path, "w") as f:
+    with open(captions_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
     logger.info("Captions generated → %s", captions_path)

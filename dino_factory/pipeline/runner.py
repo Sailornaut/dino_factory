@@ -68,7 +68,7 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True,
     # Save config snapshot
     cfg_snapshot = batch_dir / "config.yaml"
     if not cfg_snapshot.exists():
-        with open(cfg_snapshot, "w") as f:
+        with open(cfg_snapshot, "w", encoding="utf-8") as f:
             yaml.dump(cfg, f, default_flow_style=False)
 
     # Initialize providers
@@ -112,7 +112,7 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True,
             logger.info("✓ Already complete — skipping")
             meta_path = short_dir / "metadata.json"
             if meta_path.exists():
-                with open(meta_path) as f:
+                with open(meta_path, encoding="utf-8") as f:
                     all_metadata.append(json.load(f))
             else:
                 all_metadata.append({"title": topic.get("title", "")})

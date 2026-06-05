@@ -20,7 +20,7 @@ def generate_script(
     """Generate a complete script JSON for one Short."""
     if cache_path.exists():
         logger.info("Loading cached script: %s", cache_path)
-        with open(cache_path) as f:
+        with open(cache_path, encoding="utf-8") as f:
             script = json.load(f)
         if validate_script(script):
             return script
@@ -88,7 +88,7 @@ Rules:
         script.setdefault("tags", [])
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(cache_path, "w") as f:
-        json.dump(script, f, indent=2)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(script, f, indent=2, ensure_ascii=False)
     logger.info("Script generated → %s", cache_path)
     return script

@@ -13,7 +13,7 @@ def generate_metadata(script: dict, metadata_path: Path) -> dict:
     """Save YouTube metadata JSON for one Short."""
     if metadata_path.exists():
         logger.debug("Metadata cached: %s", metadata_path)
-        with open(metadata_path) as f:
+        with open(metadata_path, encoding="utf-8") as f:
             return json.load(f)
 
     meta = {
@@ -27,8 +27,8 @@ def generate_metadata(script: dict, metadata_path: Path) -> dict:
     }
 
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(metadata_path, "w") as f:
-        json.dump(meta, f, indent=2)
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2, ensure_ascii=False)
 
     logger.info("Metadata saved → %s", metadata_path)
     return meta
@@ -39,7 +39,7 @@ def generate_batch_csv(batch_dir: Path, topics: list[dict], all_metadata: list[d
     csv_path = batch_dir / "metadata.csv"
     fieldnames = ["slug", "title", "description", "tags", "video_file", "category", "privacy", "made_for_kids"]
 
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for topic, meta in zip(topics, all_metadata):
