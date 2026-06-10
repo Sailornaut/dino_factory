@@ -92,13 +92,29 @@ class FFmpegAssembler(VideoAssembler):
                     f.write(f"file '{seg}'\n")
 
             # Build final video
+            has_narration = audio_path and audio_path.exists()
+            has_music = music_path and Path(str(music_path)).exists()
+
             cmd = [
                 "ffmpeg", "-y", "-f", "concat", "-safe", "0",
                 "-i", str(concat_list),
             ]
 
-            if audio_path and audio_path.exists():
+            if has_narration and has_music:
+                # Mix narration + background music (music at ~20% volume)
+                cmd += ["-i", str(audio_path), "-i", str(music_path)]
+                cmd += [
+                    "-filter_complex",
+                    "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[narr];"
+                    "[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.2[music];"
+                    "[narr][music]amix=inputs=2:duration=longest[aout]",
+                    "-map", "0:v", "-map", "[aout]", "-shortest",
+                ]
+            elif has_narration:
                 cmd += ["-i", str(audio_path)]
+                cmd += ["-map", "0:v", "-map", "1:a", "-shortest"]
+            elif has_music:
+                cmd += ["-i", str(music_path)]
                 cmd += ["-map", "0:v", "-map", "1:a", "-shortest"]
             else:
                 cmd += ["-an"]

@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from pipeline.background_audio import generate_background_audio
 from pipeline.captions import generate_captions
 from pipeline.images import generate_images
 from pipeline.metadata import generate_batch_csv, generate_metadata
@@ -16,6 +17,7 @@ from pipeline.script import generate_script
 from pipeline.topics import generate_topics
 from pipeline.video import assemble_video
 from pipeline.voiceover import generate_voiceover
+from presets import get_preset
 from providers.image import create_image_provider
 from providers.llm import create_llm_provider
 from providers.video import create_video_assembler
@@ -84,12 +86,16 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True,
     logger.info("=" * 60)
     logger.info("STAGE 1: Generating %d topics", count)
     logger.info("=" * 60)
+    genre = cfg.get("genre", "dino_facts")
+    preset = get_preset(genre)
+
     topics = generate_topics(
         llm=llm,
         idea=cfg["idea"],
         count=count,
-        audience=cfg.get("audience", "kids ages 4-8"),
+        audience=cfg.get("audience", preset.audience),
         cache_path=batch_dir / "topics.json",
+        genre=genre,
     )
     logger.info("Got %d topics", len(topics))
 
@@ -222,6 +228,27 @@ def _process_single_short(
     else:
         captions_path = None
 
+    # Stage 5b: Generate background audio (if genre requires it)
+    _check_cancel(cancel_event, pause_event)
+    genre = cfg.get("genre", "dino_facts")
+    preset = get_preset(genre)
+    bg_audio_path = None
+    if preset.background_music_type != "none":
+        logger.info("  → Generating background audio (%s)...", preset.background_music_type)
+        # Estimate total video duration from scene durations
+        total_dur = sum(s.get("duration_seconds", 5) for s in script.get("scenes", []))
+        total_dur += preset.title_card_duration + preset.outro_card_duration + 5  # padding
+        bg_audio_path = generate_background_audio(
+            audio_type=preset.background_music_type,
+            duration=total_dur,
+            output_path=short_dir / "audio" / "background.wav",
+        )
+
+    # Use explicit music path from config, or the generated background audio
+    music_path = cfg.get("background_music_path", "")
+    if not music_path and bg_audio_path:
+        music_path = str(bg_audio_path)
+
     # Stage 6: Assemble video
     _check_cancel(cancel_event, pause_event)
     if cfg.get("video_generation_enabled", True) and image_paths:
@@ -233,7 +260,7 @@ def _process_single_short(
             audio_path=audio_path,
             captions_path=captions_path,
             output_path=short_dir / "video.mp4",
-            music_path=cfg.get("background_music_path", ""),
+            music_path=music_path,
         )
     else:
         logger.info("  → Video assembly skipped (disabled or no images)")
