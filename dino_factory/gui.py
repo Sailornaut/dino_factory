@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """DinoFactAdventures Factory — GUI launcher."""
 
+import json
 import sys
 import threading
 import tkinter as tk
@@ -25,6 +26,9 @@ VOICE_PROVIDERS       = ["elevenlabs", "openai", "placeholder"]
 GENRE_NAMES = list(ALL_PRESETS.keys())
 GENRE_LABELS = [p.label for p in ALL_PRESETS.values()]
 
+# Settings file — stored next to the script (inside the project)
+SETTINGS_PATH = Path(__file__).parent / "user_settings.json"
+
 
 class LogRedirector:
     """Forwards writes to a tkinter Text widget (thread-safe)."""
@@ -45,6 +49,58 @@ class LogRedirector:
         pass
 
 
+# ── Character parsing helpers ────────────────────────────────────────────
+
+def parse_characters(raw_text: str) -> list[dict]:
+    """Parse multi-line character definitions.
+
+    Each line: Name | personality | appearance
+    Returns list of {"name": ..., "personality": ..., "appearance": ...}
+    """
+    characters = []
+    for line in raw_text.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        char = {
+            "name": parts[0] if len(parts) >= 1 else "",
+            "personality": parts[1] if len(parts) >= 2 else "",
+            "appearance": parts[2] if len(parts) >= 3 else "",
+        }
+        if char["name"]:
+            characters.append(char)
+    return characters
+
+
+def format_characters_for_prompt(characters: list[dict]) -> str:
+    """Build a detailed character block for LLM prompts."""
+    if not characters:
+        return ""
+    lines = []
+    for c in characters:
+        parts = [f"- {c['name']}"]
+        if c.get("personality"):
+            parts.append(f"  Personality: {c['personality']}")
+        if c.get("appearance"):
+            parts.append(f"  Appearance: {c['appearance']}")
+        lines.append("\n".join(parts))
+    return "\n".join(lines)
+
+
+def format_characters_for_image(characters: list[dict]) -> str:
+    """Build a visual-only character reference for image prompts."""
+    if not characters:
+        return ""
+    parts = []
+    for c in characters:
+        desc = c["name"]
+        if c.get("appearance"):
+            desc += f" ({c['appearance']})"
+        parts.append(desc)
+    return "; ".join(parts)
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -53,9 +109,13 @@ class App(tk.Tk):
         self._cancel_event = threading.Event()
         self._pause_event = threading.Event()
         self._running = False
+        self._skip_genre_defaults = False  # flag to avoid overwriting loaded settings
         self._build_ui()
-        # Initialize genre-dependent UI
-        self._on_genre_change()
+        self._load_settings()
+        # Initialize genre-dependent UI (show/hide character field)
+        self._on_genre_change(update_defaults=False)
+        # Save settings on window close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── UI construction ──────────────────────────────────────────────────
 
@@ -70,7 +130,7 @@ class App(tk.Tk):
         genre_cb = ttk.Combobox(self, textvariable=self._genre_var, values=GENRE_LABELS,
                                 state="readonly", width=30)
         genre_cb.grid(row=1, column=1, columnspan=2, sticky="w", **pad)
-        genre_cb.bind("<<ComboboxSelected>>", lambda e: self._on_genre_change())
+        genre_cb.bind("<<ComboboxSelected>>", lambda e: self._on_genre_change(update_defaults=True))
 
         self._genre_desc = tk.Label(self, text="", fg="#666666", anchor="w",
                                     font=("TkDefaultFont", 8), wraplength=400)
@@ -85,14 +145,24 @@ class App(tk.Tk):
             row=4, column=1, columnspan=3, sticky="ew", **pad
         )
 
-        # ── Character names (bedtime stories) ────────────────────────────
-        self._char_label = tk.Label(self, text="Character names", anchor="w")
-        self._char_label.grid(row=5, column=0, sticky="w", **pad)
-        self._character_names = tk.StringVar(value="")
-        self._char_entry = tk.Entry(self, textvariable=self._character_names, width=40)
-        self._char_entry.grid(row=5, column=1, columnspan=3, sticky="ew", **pad)
-        self._char_hint = tk.Label(self, text="(e.g. Luna, Oliver the Owl — used as story protagonists)",
-                                   fg="gray", anchor="w")
+        # ── Characters (bedtime stories) ─────────────────────────────────
+        self._char_label = tk.Label(self, text="Characters", anchor="nw")
+        self._char_label.grid(row=5, column=0, sticky="nw", **pad)
+
+        # Multi-line Text widget for structured character input
+        self._char_frame = tk.Frame(self)
+        self._char_frame.grid(row=5, column=1, columnspan=3, sticky="ew", **pad)
+
+        self._char_text = tk.Text(self._char_frame, width=52, height=4,
+                                  font=("Courier", 9), wrap="word")
+        self._char_text.pack(fill="x")
+
+        self._char_hint = tk.Label(
+            self, fg="gray", anchor="w", wraplength=450,
+            text="One character per line:  Name | personality | appearance\n"
+                 "e.g.  Luna | curious, gentle, loves stars | small white bunny with a blue scarf",
+            justify="left",
+        )
         self._char_hint.grid(row=6, column=1, columnspan=3, sticky="w", padx=12, pady=0)
 
         # ── Batch settings ───────────────────────────────────────────────
@@ -172,10 +242,83 @@ class App(tk.Tk):
         tk.Label(self, text=f"  {label}  ", fg="#555555",
                  font=("TkDefaultFont", 8)).grid(row=row, column=0, sticky="w", padx=18)
 
+    # ── Settings persistence ─────────────────────────────────────────────
+
+    def _save_settings(self):
+        """Save all GUI field values to a JSON file."""
+        settings = {
+            "genre":          self._genre_var.get(),
+            "idea":           self._idea.get(),
+            "characters":     self._char_text.get("1.0", "end-1c"),
+            "length":         self._length.get(),
+            "quantity":       self._quantity.get(),
+            "openai_key":     self._openai_key.get(),
+            "eleven_key":     self._eleven_key.get(),
+            "voice_provider": self._voice_provider.get(),
+            "eleven_voice":   self._eleven_voice.get(),
+        }
+        try:
+            with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # non-critical — don't crash if save fails
+
+    def _load_settings(self):
+        """Restore GUI fields from saved settings file."""
+        if not SETTINGS_PATH.exists():
+            return
+        try:
+            with open(SETTINGS_PATH, encoding="utf-8") as f:
+                s = json.load(f)
+        except Exception:
+            return
+
+        # Restore genre first (controls which fields are visible)
+        if s.get("genre") and s["genre"] in GENRE_LABELS:
+            self._genre_var.set(s["genre"])
+
+        if s.get("idea"):
+            self._idea.set(s["idea"])
+
+        # Restore characters text
+        if s.get("characters"):
+            self._char_text.delete("1.0", tk.END)
+            self._char_text.insert("1.0", s["characters"])
+
+        if s.get("length"):
+            try:
+                self._length.set(int(s["length"]))
+            except (ValueError, tk.TclError):
+                pass
+
+        if s.get("quantity"):
+            try:
+                self._quantity.set(int(s["quantity"]))
+            except (ValueError, tk.TclError):
+                pass
+
+        if s.get("openai_key"):
+            self._openai_key.set(s["openai_key"])
+        if s.get("eleven_key"):
+            self._eleven_key.set(s["eleven_key"])
+        if s.get("voice_provider"):
+            self._voice_provider.set(s["voice_provider"])
+        if s.get("eleven_voice"):
+            self._eleven_voice.set(s["eleven_voice"])
+
+    def _on_close(self):
+        """Save settings and close the app."""
+        self._save_settings()
+        self.destroy()
+
     # ── Genre change handler ─────────────────────────────────────────────
 
-    def _on_genre_change(self):
-        """Update UI when genre selection changes."""
+    def _on_genre_change(self, update_defaults: bool = True):
+        """Update UI when genre selection changes.
+
+        update_defaults: if True, overwrite idea/length with preset defaults.
+        Set to False when restoring saved settings so we don't clobber them.
+        """
         label = self._genre_var.get()
         idx = GENRE_LABELS.index(label) if label in GENRE_LABELS else 0
         genre_name = GENRE_NAMES[idx]
@@ -184,26 +327,33 @@ class App(tk.Tk):
         # Update description
         self._genre_desc.configure(text=preset.description)
 
-        # Update default idea
-        self._idea.set(preset.default_idea)
+        if update_defaults:
+            # Update default idea
+            self._idea.set(preset.default_idea)
 
-        # Update length options
-        if preset.target_length > 120:
-            self._length_cb.configure(values=LENGTH_OPTIONS_LONG)
-            self._length.set(preset.target_length)
+            # Update length options
+            if preset.target_length > 120:
+                self._length_cb.configure(values=LENGTH_OPTIONS_LONG)
+                self._length.set(preset.target_length)
+            else:
+                self._length_cb.configure(values=LENGTH_OPTIONS_SHORT)
+                self._length.set(preset.target_length)
         else:
-            self._length_cb.configure(values=LENGTH_OPTIONS_SHORT)
-            self._length.set(preset.target_length)
+            # Still update the combobox value list so the current value is valid
+            if preset.target_length > 120:
+                self._length_cb.configure(values=LENGTH_OPTIONS_LONG)
+            else:
+                self._length_cb.configure(values=LENGTH_OPTIONS_SHORT)
 
-        # Show/hide character names field (bedtime stories only)
+        # Show/hide character field (bedtime stories only)
         show_chars = "character_names" in preset.extra_fields
         if show_chars:
             self._char_label.grid()
-            self._char_entry.grid()
+            self._char_frame.grid()
             self._char_hint.grid()
         else:
             self._char_label.grid_remove()
-            self._char_entry.grid_remove()
+            self._char_frame.grid_remove()
             self._char_hint.grid_remove()
 
         # Update voice hint with preset default
@@ -223,6 +373,9 @@ class App(tk.Tk):
             self._log_append("Please enter an idea before generating.\n")
             return
 
+        # Save settings before each run
+        self._save_settings()
+
         self._cancel_event.clear()
         self._pause_event.clear()
         self._running = True
@@ -237,6 +390,10 @@ class App(tk.Tk):
         genre_name = self._get_current_genre_name()
         preset = get_preset(genre_name)
 
+        # Parse structured character definitions
+        raw_chars = self._char_text.get("1.0", "end-1c").strip()
+        characters = parse_characters(raw_chars) if raw_chars else []
+
         params = {
             "idea":            idea,
             "genre":           genre_name,
@@ -246,7 +403,8 @@ class App(tk.Tk):
             "eleven_key":      self._eleven_key.get().strip(),
             "voice_provider":  self._voice_provider.get(),
             "eleven_voice_id": self._eleven_voice.get().strip(),
-            "character_names": self._character_names.get().strip(),
+            "characters":      characters,    # list of dicts
+            "characters_raw":  raw_chars,     # original text for config
         }
         redirector = LogRedirector(self._log)
         threading.Thread(target=self._run_pipeline, args=(params, redirector),
@@ -308,9 +466,11 @@ class App(tk.Tk):
             cfg["visual_style"]       = preset.visual_style
             cfg["scenes_per_video"]   = preset.scenes_per_video
 
-            # Character names for bedtime stories
-            if params["character_names"]:
-                cfg["character_names"] = params["character_names"]
+            # Structured character definitions for bedtime stories
+            if params["characters"]:
+                cfg["characters"] = params["characters"]
+                cfg["characters_prompt"] = format_characters_for_prompt(params["characters"])
+                cfg["characters_visual"] = format_characters_for_image(params["characters"])
 
             if params["openai_key"]:
                 cfg["openai_api_key"] = params["openai_key"]

@@ -34,7 +34,8 @@ def generate_script(
     audience = cfg.get("audience", preset.audience)
     channel = cfg.get("channel_name", "DinoFactAdventures")
     scenes_count = cfg.get("scenes_per_video", cfg.get("scenes_per_short", preset.scenes_per_video))
-    character_names = cfg.get("character_names", "")
+    characters_prompt = cfg.get("characters_prompt", "")
+    characters_visual = cfg.get("characters_visual", "")
 
     system_prompt = preset.system_prompt
 
@@ -43,7 +44,7 @@ def generate_script(
 
     if genre == "bedtime_stories":
         prompt = _bedtime_prompt(topic, target_len, style, audience, channel,
-                                 scenes_count, character_names)
+                                 scenes_count, characters_prompt, characters_visual)
     elif genre == "creepypasta":
         prompt = _creepypasta_prompt(topic, target_len, style, audience, channel,
                                      scenes_count)
@@ -119,13 +120,21 @@ Rules:
 """
 
 
-def _bedtime_prompt(topic, target_len, style, audience, channel, scenes_count, character_names):
+def _bedtime_prompt(topic, target_len, style, audience, channel, scenes_count,
+                    characters_prompt, characters_visual):
     character_instruction = ""
-    if character_names:
+    if characters_prompt:
         character_instruction = f"""
 IMPORTANT — RECURRING CHARACTERS:
-The following character name(s) must be the protagonist(s) of this story: {character_names}
-Use these names consistently throughout. The child listening should feel like these are THEIR characters who go on a new gentle adventure each episode.
+These characters MUST be the protagonist(s) of this story. Use their names,
+personalities, and appearances CONSISTENTLY throughout — the child listening
+should feel like these are THEIR characters going on a new gentle adventure.
+
+{characters_prompt}
+
+VISUAL CONSISTENCY: Every image_prompt that includes a character MUST describe
+their appearance exactly as defined above so they look the same across all scenes.
+Character visual reference: {characters_visual}
 """
 
     return f"""Create a gentle bedtime story script for a calming YouTube video.
@@ -151,7 +160,7 @@ Return a JSON object with this exact structure:
       "scene_number": 1,
       "duration_seconds": {target_len // scenes_count},
       "visual_description": "What the illustration shows",
-      "image_prompt": "Detailed image generation prompt in style: {style}",
+      "image_prompt": "Detailed image generation prompt in style: {style}. IMPORTANT: if a character appears, describe their appearance explicitly: {characters_visual or 'N/A'}",
       "caption": "Short gentle text overlay"
     }}
   ],
@@ -167,7 +176,8 @@ CRITICAL STORYTELLING RULES:
 - Use sensory details: soft moonlight, warm blankets, gentle breezes, quiet sounds
 - NO excitement, tension, or loud moments — this is meant to help children fall asleep
 - The final 2-3 scenes must describe settling down, closing eyes, and peaceful sleep
-- Each image_prompt should create a soft, dreamy, watercolor-style illustration
+- Each image_prompt MUST include the full visual appearance of any character shown so that
+  image generation produces a consistent look across all scenes
 - Captions should be short and calming
 - Return ONLY the JSON, no other text
 """
