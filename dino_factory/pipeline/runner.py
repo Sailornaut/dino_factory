@@ -44,6 +44,49 @@ def _check_cancel(cancel_event: threading.Event | None,
         raise PipelineCancelled("Pipeline cancelled by user")
 
 
+def _should_resume_batch(batch_dir: Path, cfg: dict) -> str:
+    """Decide whether to resume a previous batch.
+
+    Returns:
+        "resume"         — batch is incomplete and matches current settings
+        "skip_complete"  — batch finished with no errors
+        "skip_mismatch"  — batch was for a different prompt/genre/count
+        "skip_empty"     — batch dir is empty or unreadable
+    """
+    cfg_path = batch_dir / "config.yaml"
+    shorts_dir = batch_dir / "shorts"
+    errors_dir = batch_dir / "errors"
+
+    if not cfg_path.exists():
+        return "skip_empty"
+
+    # Load the saved config to compare against current request
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            prev_cfg = yaml.safe_load(f) or {}
+    except Exception:
+        return "skip_empty"
+
+    # Check if the prompt / genre / count match
+    same_idea  = prev_cfg.get("idea", "").strip() == cfg.get("idea", "").strip()
+    same_genre = prev_cfg.get("genre", "dino_facts") == cfg.get("genre", "dino_facts")
+    same_count = prev_cfg.get("number_of_shorts", 5) == cfg.get("number_of_shorts", 5)
+
+    if not (same_idea and same_genre and same_count):
+        return "skip_mismatch"
+
+    # Count completed videos vs expected
+    expected = prev_cfg.get("number_of_shorts", 5)
+    completed_videos = list(shorts_dir.glob("*/video.mp4")) if shorts_dir.exists() else []
+    error_files = list(errors_dir.glob("*.error.txt")) if errors_dir.exists() else []
+
+    if len(completed_videos) >= expected and len(error_files) == 0:
+        return "skip_complete"
+
+    # Has incomplete work (or errors to retry)
+    return "resume"
+
+
 def run_pipeline(cfg: dict[str, Any], resume: bool = True,
                  cancel_event: threading.Event | None = None,
                  pause_event: threading.Event | None = None):
@@ -54,12 +97,23 @@ def run_pipeline(cfg: dict[str, Any], resume: bool = True,
     output_base = Path(cfg.get("output_dir", "output"))
     batch_dir = output_base / f"batch_{timestamp}"
 
-    # If resuming, look for the most recent existing batch
+    # If resuming, look for the most recent existing batch — but only
+    # resume if it's (a) incomplete and (b) for the same prompt/genre.
     if resume and output_base.exists():
         existing = sorted(output_base.glob("batch_*"), reverse=True)
-        if existing:
-            batch_dir = existing[0]
-            logger.info("Resuming batch: %s", batch_dir)
+        for candidate in existing:
+            reason = _should_resume_batch(candidate, cfg)
+            if reason == "resume":
+                batch_dir = candidate
+                logger.info("Resuming incomplete batch: %s", batch_dir)
+                break
+            elif reason == "skip_complete":
+                logger.info("Previous batch complete — starting fresh")
+                break
+            elif reason == "skip_mismatch":
+                logger.info("Previous batch has different settings — starting fresh")
+                break
+            # reason == "skip_empty" — try next candidate
 
     batch_dir.mkdir(parents=True, exist_ok=True)
     shorts_dir = batch_dir / "shorts"
