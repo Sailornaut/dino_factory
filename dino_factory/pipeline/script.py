@@ -65,6 +65,17 @@ def generate_script(
         script.setdefault("youtube_description", "")
         script.setdefault("tags", [])
 
+    # Log word count so we can spot short scripts
+    voiceover_text = script.get("voiceover", "")
+    word_count = len(voiceover_text.split())
+    est_minutes = word_count / 130  # conservative wpm
+    logger.info("Voiceover: %d words (~%.1f min at 130 wpm) for %ds target",
+                word_count, est_minutes, target_len)
+    if word_count < (target_len * 100 / 60):  # very generous floor
+        logger.warning("Voiceover may be SHORT — %d words for %ds target. "
+                       "Video will be trimmed to match narration length.",
+                       word_count, target_len)
+
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(script, f, indent=2, ensure_ascii=False)
@@ -76,6 +87,8 @@ def generate_script(
 
 
 def _dino_facts_prompt(topic, target_len, style, audience, channel, scenes_count):
+    # ~150 words per minute for upbeat kids narration
+    word_target = int(target_len * 150 / 60)
     return f"""Create a YouTube Shorts script about this topic:
 
 Title: {topic['title']}
@@ -92,7 +105,7 @@ Return a JSON object with this exact structure:
 {{
   "title": "...",
   "hook": "A 1-sentence attention grabber for the first 3 seconds",
-  "voiceover": "The full narration text, natural and conversational",
+  "voiceover": "The full narration text — MUST be at least {word_target} words. Natural and conversational.",
   "scenes": [
     {{
       "scene_number": 1,
@@ -116,6 +129,9 @@ Rules:
 - Captions should be short (under 10 words each)
 - The voiceover should sound natural, not robotic
 - Include "wow" moments that make kids say "that's so cool!"
+- CRITICAL: The voiceover text MUST be at least {word_target} words — count carefully!
+  At 150 words/minute, {word_target} words fills {target_len} seconds.
+  If you write fewer words, the video will have awkward silence.
 - Return ONLY the JSON, no other text
 """
 
@@ -137,6 +153,9 @@ their appearance exactly as defined above so they look the same across all scene
 Character visual reference: {characters_visual}
 """
 
+    # ~120 words per minute for slow, gentle bedtime narration
+    word_target = int(target_len * 120 / 60)
+
     return f"""Create a gentle bedtime story script for a calming YouTube video.
 
 Story concept: {topic['title']}
@@ -144,6 +163,7 @@ Story seed: {topic.get('fun_fact', topic['title'])}
 {character_instruction}
 Requirements:
 - Target length: {target_len} seconds (~{target_len // 60} minutes)
+- WORD COUNT: The voiceover MUST be at least {word_target} words (at 120 words/minute for slow bedtime pacing, {word_target} words = {target_len // 60} minutes)
 - Audience: {audience}
 - Visual style: {style}
 - Channel name: {channel}
@@ -154,7 +174,7 @@ Return a JSON object with this exact structure:
 {{
   "title": "...",
   "hook": "A soft, inviting opening line that sets the sleepy mood",
-  "voiceover": "The FULL story narration — this is the complete text that will be read aloud. It should be {target_len // 60}-{target_len // 60 + 2} minutes when read at a slow, gentle pace. Write it as flowing prose, not bullet points.",
+  "voiceover": "The FULL story narration — MUST be at least {word_target} words. This is the complete text read aloud at a slow, gentle pace. Write it as flowing prose, not bullet points.",
   "scenes": [
     {{
       "scene_number": 1,
@@ -171,7 +191,10 @@ Return a JSON object with this exact structure:
 }}
 
 CRITICAL STORYTELLING RULES:
-- The voiceover must be LONG — a full story that fills {target_len // 60} minutes read slowly
+- MOST IMPORTANT: The voiceover MUST be at least {word_target} words! Count carefully.
+  A 6-minute bedtime story at 120 wpm needs ~720 words. Write a FULL, COMPLETE story.
+  Expand scenes with sensory details, gentle dialogue, and descriptive passages.
+  If your voiceover is under {word_target} words, the video will have awkward silence.
 - Pacing: start gently, wind DOWN toward sleep, end with the character(s) drifting off
 - Use sensory details: soft moonlight, warm blankets, gentle breezes, quiet sounds
 - NO excitement, tension, or loud moments — this is meant to help children fall asleep
@@ -184,6 +207,9 @@ CRITICAL STORYTELLING RULES:
 
 
 def _creepypasta_prompt(topic, target_len, style, audience, channel, scenes_count):
+    # ~130 words per minute for deliberate, atmospheric horror narration
+    word_target = int(target_len * 130 / 60)
+
     return f"""Create a creepypasta-style horror narration script for a YouTube video.
 
 Story concept: {topic['title']}
@@ -191,6 +217,7 @@ Story seed: {topic.get('fun_fact', topic['title'])}
 
 Requirements:
 - Target length: {target_len} seconds (~{target_len // 60} minutes)
+- WORD COUNT: The voiceover MUST be at least {word_target} words (at 130 words/minute for slow horror pacing, {word_target} words = {target_len // 60} minutes)
 - Audience: {audience}
 - Visual style: {style}
 - Channel name: {channel}
@@ -201,7 +228,7 @@ Return a JSON object with this exact structure:
 {{
   "title": "...",
   "hook": "A disturbing opening line that immediately creates unease",
-  "voiceover": "The FULL narration — a complete first-person horror story, {target_len // 60}-{target_len // 60 + 3} minutes when read at a deliberate pace. Write as flowing, atmospheric prose. Build slow dread.",
+  "voiceover": "The FULL narration — MUST be at least {word_target} words. A complete first-person horror story at a deliberate pace. Write as flowing, atmospheric prose. Build slow dread.",
   "scenes": [
     {{
       "scene_number": 1,
@@ -218,8 +245,11 @@ Return a JSON object with this exact structure:
 }}
 
 STORYTELLING RULES:
+- MOST IMPORTANT: The voiceover MUST be at least {word_target} words! Count carefully.
+  A 10-minute creepypasta at 130 wpm needs ~1300 words. Write a FULL, COMPLETE story.
+  Expand with atmospheric details, internal monologue, specific sensory descriptions.
+  If your voiceover is under {word_target} words, the video will have awkward silence.
 - Write in FIRST PERSON — "I", "my", "me" — the narrator experienced this
-- The voiceover must be LONG — a complete story filling {target_len // 60} minutes
 - Build SLOWLY: normal → one wrong detail → escalating dread → revelation
 - Use SPECIFIC mundane details (dates, places, routines) to make it feel real
 - Horror is PSYCHOLOGICAL — what's implied, not what's shown

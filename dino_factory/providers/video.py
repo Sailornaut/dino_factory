@@ -107,7 +107,7 @@ class FFmpegAssembler(VideoAssembler):
                     "-filter_complex",
                     "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[narr];"
                     "[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.2[music];"
-                    "[narr][music]amix=inputs=2:duration=longest[aout]",
+                    "[narr][music]amix=inputs=2:duration=first[aout]",
                     "-map", "0:v", "-map", "[aout]", "-shortest",
                 ]
             elif has_narration:
